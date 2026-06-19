@@ -1,17 +1,17 @@
 # Workflow OFICIAL da plataforma (reusable workflow).
-# Vive no SEU repositório (commitcert/validation-workflows), separado do aluno.
-# O repo do aluno NÃO roda os testes sozinho — ele apenas CHAMA este arquivo.
-# Como este arquivo está no seu repo, o aluno não consegue alterá-lo: é isso
-# que faz o claim job_workflow_ref do OIDC apontar para algo confiável.
+# Roda o gate (testes travados) e ENVIA o cracha OIDC para a sua API decidir.
 
 name: CommitCert Validate (oficial)
 
-# "workflow_call" = este workflow só roda quando OUTRO workflow o chama.
 on:
   workflow_call:
     inputs:
       course:
         description: "ID do curso (ex.: backend-go-03-http)"
+        required: true
+        type: string
+      api_url:
+        description: "URL publica da sua API (em dev, a URL do tunel)"
         required: true
         type: string
 
@@ -23,7 +23,6 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      # checkout aqui baixa o repo do ALUNO (o repo que disparou a chamada).
       - name: Baixar o codigo do aluno
         uses: actions/checkout@v4
 
@@ -32,21 +31,31 @@ jobs:
         with:
           node-version: '20'
 
-      # GATE: os testes travados precisam passar (RFC §7).
+      # GATE: testes travados precisam passar. Se falharem, o job para aqui
+      # (vermelho) e nem chega a chamar a API.
       - name: Rodar os testes travados (gate)
         run: node --test
 
-      # Pede o cracha OIDC e mostra as claims. Repare que agora o
-      # job_workflow_ref vai apontar para ESTE repo oficial, nao para o do aluno.
-      - name: Pedir o cracha OIDC e mostrar as claims
+      - name: Enviar OIDC para a API de validacao
         run: |
+          # 1) Pede o cracha OIDC, endereçado para a sua API (audience).
           TOKEN=$(curl -sS \
             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api.commitcert.io" \
             | jq -r '.value')
 
-          echo "$TOKEN" | python3 -c "import sys,base64,json; p=sys.stdin.read().strip().split('.')[1]; p+='='*(-len(p)%4); print(json.dumps(json.loads(base64.urlsafe_b64decode(p)), indent=2))" > claims.json
+          # 2) Monta o corpo JSON com seguranca (jq -n evita problema de aspas).
+          BODY=$(jq -n --arg jwt "$TOKEN" --arg course "${{ inputs.course }}" \
+            '{jwt: $jwt, course: $course, gate_passed: true}')
 
-          echo '=== Claims do cracha OIDC (rodando pelo workflow OFICIAL) ==='
-          jq '{repository, sha, job_workflow_ref, actor, aud, iss, exp}' claims.json
-          echo "curso recebido pela plataforma: ${{ inputs.course }}"
+          echo "Enviando para ${{ inputs.api_url }}/v1/validate ..."
+          RESP=$(curl -sS -X POST "${{ inputs.api_url }}/v1/validate" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+
+          echo "Resposta da API:"
+          echo "$RESP" | jq .
+
+          # 3) Falha o job se a API nao aprovou (status != approved).
+          echo "$RESP" | jq -e '.status == "approved"' > /dev/null \
+            || { echo "Validacao NAO aprovada."; exit 1; }
