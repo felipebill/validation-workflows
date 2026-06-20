@@ -11,9 +11,12 @@ on:
         required: true
         type: string
       api_url:
-        description: "URL publica da sua API (em dev, a URL do tunel)"
-        required: true
+        # PRODUCAO: o endereco oficial mora AQUI (default), nao no repo do aluno.
+        # DEV: o ci.yml de teste passa este input com a URL do tunel, sobrescrevendo.
+        description: "URL publica da API (default = producao; dev sobrescreve com o tunel)"
+        required: false
         type: string
+        default: "https://api.commitcert.io"
 
 permissions:
   id-token: write   # para pedir o cracha OIDC
